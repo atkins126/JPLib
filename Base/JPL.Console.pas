@@ -455,6 +455,7 @@ procedure ConWriteColoredTextLineEx(const cce: TConsoleColorEx);
 
 procedure ConGetColorsFromStr(const sColors: string; out TextColor, BgColor: Byte);
 function ConColorToStr(const Color: Byte {$IFDEF UNIX}; AddFgBgSuffix: Boolean = False{$ENDIF}): string;
+function ConColorToStrID(const Color: Byte; const sInvalidColor: string = 'none'): string;
 
 procedure ConWriteTaggedText(s: string);
 procedure ConWriteTaggedTextLine(s: string);
@@ -477,6 +478,7 @@ function OutputIsCharacterDevice(ResultIfStatFailed: Boolean = True): Boolean;
 function OutputIsNamedPipe(ResultIfStatFailed: Boolean = True): Boolean;
 function OutputIsRegularFile(ResultIfStatFailed: Boolean = True): Boolean;
 {$ENDIF}
+function StripColorTags(s: string): string;
 
 var
 
@@ -891,9 +893,9 @@ begin
     TConsole.clLightBlueText: Result := 'Light Blue';
 
     TConsole.clBlackText: Result := 'Black';
-    TConsole.clLightBlackText: Result := 'Light Black (Dark Gray)';
+    TConsole.clLightBlackText: Result := 'Light Black'; // Dark Gray
 
-    TConsole.clDarkWhiteText: Result := 'Dark White (Light Gray)';
+    TConsole.clDarkWhiteText: Result := 'Dark White'; // Light Gray
     TConsole.clWhiteText: Result := 'White';
 
     TConsole.clDarkCyanText: Result := 'Dark Cyan';
@@ -953,7 +955,15 @@ begin
   end;
   {$ENDIF}
 end;
+
 {$endregion ConColorToStr}
+
+function ConColorToStrID(const Color: Byte; const sInvalidColor: string = 'none'): string;
+begin
+  Result := ConColorToStr(Color);
+  Result := RemoveAll(Result, ' ');
+  if UpperCase(Result) = 'UNKNOWNCOLOR' then Result := sInvalidColor;
+end;
 
 {$region '                  ConWriteTaggedText & Line                     '}
 procedure ConWriteTaggedText(s: string);
@@ -1583,6 +1593,67 @@ begin
   ConStdOut := GetStdHandle(STD_OUTPUT_HANDLE);
 end;
 {$ENDIF}
+
+function StripColorTags(s: string): string;
+var
+  x, xpe: integer;
+  sn, sInTag: string;
+  sr: string;
+begin
+  sr := '';
+
+  x := Pos('<color=', s);
+
+  if x <= 0 then
+  begin
+    Result := s;
+    Exit;
+  end;
+
+  while x > 0 do
+  begin
+
+    x := Pos('<color=', s);
+
+    if x = 0 then
+    begin
+      sr := sr + s;
+      Break;
+    end;
+
+    sn := Copy(s, 1, x - 1);
+    if sn <> '' then sr := sr + sn;
+
+    s := Copy(s, x + Length('<color='), Length(s));
+
+    xpe := Pos('>', s);
+
+    if xpe > 0 then
+    begin
+      s := Copy(s, xpe + 1, Length(s));
+
+      xpe := Pos('</color>', s);
+
+      if xpe > 0 then
+      begin
+        sInTag := Copy(s, 1, xpe - 1);
+        sr := sr + sInTag;
+        s := Copy(s, xpe + Length('</color>'), Length(s));
+      end;
+    end
+
+    else
+
+    begin
+      sr := sr + s;
+      Break; // niedomknięty znacznik
+    end;
+
+  end; // while
+
+  Result := sr;
+
+end;
 
 
 procedure ConInit;

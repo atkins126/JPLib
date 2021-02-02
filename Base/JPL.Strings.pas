@@ -17,7 +17,7 @@
 interface
 
 uses
-  SysUtils, Types;
+  SysUtils, Types, JPL.Bytes;
 
 const
   CR = #13;
@@ -46,8 +46,10 @@ function FixPathDelimiters(const FileName: string): string;
 function PadString(Text: string; i: integer; znak: Char = ' '): string;
 function Pad(Text: string; Len: integer; PaddingChar: Char = ' '): string; overload;
 function Pad(const x: integer; Len: integer; PaddingChar: Char = '0'): string; overload;
+function Pad(const x: Int64; Len: integer; PaddingChar: Char = '0'): string; overload;
 function PadRight(Text: string; Len: integer; PaddingChar: Char = ' '): string; overload;
 function PadRight(const x: integer; Len: integer; PaddingChar: Char = ' '): string; overload;
+function PadRight(const x: Int64; Len: integer; PaddingChar: Char = ' '): string; overload;
 function UnquoteStr(s: string; bDoubleQuote: Boolean = True): string;
 function IntToStrEx(const x: int64; c: Char = ' '): string; overload;
 function IntToStrEx(const x: integer; c: Char = ' '): string; overload;
@@ -66,7 +68,8 @@ function RemoveSlashes(const Text: string): string;
 function RemoveSpaces(const s: string): string;
 function ReplaceSpecialChars(s: string; sc: Char = '_'): string;
 
-function RemoveAll(const Text, ToRemove: string; IgnoreCase: Boolean = False): string;
+function RemoveAll(const Text, ToRemove: string; IgnoreCase: Boolean = False): string; overload;
+function RemoveAll(const Text: string; const StringsToRemove: array of string; IgnoreCase: Boolean = False): string; overload;
 function RemoveNonLetters(s: string): string;
 function ReplaceAll(const SrcStr, OldStr, NewStr: string; IgnoreCase: Boolean = False): string;
 function ReplaceFirst(const SrcStr, OldStr, NewStr: string; IgnoreCase: Boolean = False): string;
@@ -129,6 +132,7 @@ procedure SplitStrToArray(s: string; var Arr: TArray<string>; const EndLineStr: 
 // The SplitStrToArrayEx procedure uses the initial allocation of the size of the array and incrementing its size by the ArrDeltaSize value
 // to avoid increasing the size of the array repeatedly by 1.
 procedure SplitStrToArrayEx(s: string; var Arr: TStringDynArray; const EndLineStr: string = sLineBreak; ArrDeltaSize: WORD = 100);
+function RemoveEmptyStrings(var Arr: TStringDynArray): integer; // Returns the number of removed empty strings
 function SplitStr(const InStr: string; out LeftStr, RightStr: string; const Separator: string): Boolean; overload;
 function SplitStr(const InStr: string; out LeftInt, RightInt: integer; const Separator: string): Boolean; overload;
 
@@ -158,9 +162,107 @@ function PathIsAbsolute(const FileName: string): Boolean;
 
 function GetDecimalSeparator: Char;
 
+function SaveStringToFile(const FileName, Content: string; Encoding: TEncoding; const WriteBOM: Boolean = True):Boolean; overload;
+function SaveStringToFile(const FileName, Content: string): Boolean; overload;
+function LoadStringFromFile(const FileName: string; var s: string; Encoding: TEncoding): Boolean; overload;
+function LoadStringFromFile(const FileName: string; var s: string): Boolean; overload;
+
 
 implementation
 
+
+{$IFDEF FPC}
+function SaveStringToFile(const FileName, Content: string; Encoding: TEncoding; const WriteBOM: Boolean = True): Boolean; overload;
+var
+  BOM: TBytes = nil;
+  ByteContent: TBytes = nil;
+begin
+  SetLength(BOM, 0);
+  if WriteBOM then BOM := Encoding.GetPreamble;
+
+  SetLength(ByteContent, 0);
+  {$IFDEF FPC320_OR_ABOVE}
+  if Length(BOM) > 0 then ConcatTBytes(BOM, Encoding.GetAnsiBytes(Content), ByteContent)
+  else ByteContent := Encoding.GetAnsiBytes(Content);
+  {$ELSE}
+  if Length(BOM) > 0 then ConcatTBytes(BOM, Encoding.GetBytes(UnicodeString(Content)), ByteContent)
+  else ByteContent := Encoding.GetBytes(UnicodeString(Content));
+  {$ENDIF}
+
+  Result := SaveBytesToFile(FileName, ByteContent);
+end;
+{$ELSE}
+function SaveStringToFile(const FileName, Content: string; Encoding: TEncoding; const WriteBOM: Boolean = True): Boolean; overload;
+var
+  BOM: TBytes {$IFDEF FPC}= nil{$ENDIF};
+  ByteContent: TBytes {$IFDEF FPC}= nil{$ENDIF};
+begin
+  SetLength(BOM, 0);
+  if WriteBOM then BOM := Encoding.GetPreamble;
+
+  SetLength(ByteContent, 0);
+  if Length(BOM) > 0 then ConcatTBytes(BOM, Encoding.GetBytes(Content), ByteContent)
+  else ByteContent := Encoding.GetBytes(Content);
+
+  Result := SaveBytesToFile(FileName, ByteContent);
+end;
+{$ENDIF}
+
+function SaveStringToFile(const FileName, Content: string): Boolean; overload;
+begin
+  Result := SaveStringToFile(FileName, Content, TEncoding.Default);
+end;
+
+{$IFDEF FPC}
+function LoadStringFromFile(const FileName: string; var s: string; Encoding: TEncoding): Boolean; overload;
+var
+  Bytes: TBytes = nil;
+  xBomLen: integer;
+begin
+  Result := False;
+  if not FileExists(FileName) then Exit;
+  Result := GetFileContentAsBytes(FileName, Bytes);
+  if Result then
+  begin
+    Encoding := nil;
+    // http://docwiki.embarcadero.com/Libraries/Sydney/en/System.SysUtils.TEncoding.GetBufferEncoding
+    // https://www.freepascal.org/docs-html/rtl/sysutils/tencoding.getbufferencoding.html
+    // GetBufferEncoding detects encoding of Bytes, and assigns detected encoding to the Encoding param.
+    // So after GetBufferEncoding, the Encoding is NOT = nil
+    xBomLen := TEncoding.GetBufferEncoding(Bytes, Encoding, TEncoding.Default);
+    {$IFDEF FPC320_OR_ABOVE}
+    s := Encoding.GetAnsiString(Bytes, xBomLen, Length(Bytes) - xBomLen);
+    {$ELSE}
+    s := string(Encoding.GetString(Bytes, xBomLen, Length(Bytes) - xBomLen));
+    {$ENDIF}
+  end;
+end;
+{$ELSE}
+function LoadStringFromFile(const FileName: string; var s: string; Encoding: TEncoding): Boolean; overload;
+var
+  Bytes: TBytes;
+  xBomLen: integer;
+begin
+  Result := False;
+  if not FileExists(FileName) then Exit;
+  Result := GetFileContentAsBytes(FileName, Bytes);
+  if Result then
+  begin
+    Encoding := nil;
+    // http://docwiki.embarcadero.com/Libraries/Sydney/en/System.SysUtils.TEncoding.GetBufferEncoding
+    // https://www.freepascal.org/docs-html/rtl/sysutils/tencoding.getbufferencoding.html
+    // GetBufferEncoding detects encoding of Bytes, and assigns detected encoding to the Encoding param.
+    // So after GetBufferEncoding, the Encoding is NOT = nil
+    xBomLen := TEncoding.GetBufferEncoding(Bytes, Encoding {$IFDEF DELPHIXE_OR_ABOVE}, TEncoding.Default{$ENDIF});
+    s := Encoding.GetString(Bytes, xBomLen, Length(Bytes) - xBomLen);
+  end;
+end;
+{$ENDIF}
+
+function LoadStringFromFile(const FileName: string; var s: string): Boolean; overload;
+begin
+  Result := LoadStringFromFile(FileName, s, TEncoding.Default);
+end;
 
 function GetDecimalSeparator: Char;
 begin
@@ -429,6 +531,33 @@ begin
   end;
 end;
 
+function RemoveEmptyStrings(var Arr: TStringDynArray): integer;
+var
+  A: TStringDynArray {$IFDEF FPC}= nil{$ENDIF};
+  i, Len, Ind: integer;
+begin
+  Result := 0;
+  Len := Length(Arr);
+  if Len = 0 then Exit;
+
+  SetLength(A, Len);
+  Ind := 0;
+  for i := 0 to Len - 1 do
+  begin
+
+    if Arr[i] = '' then Inc(Result)
+    else
+    begin
+      A[Ind] := Arr[i];
+      Inc(Ind);
+    end;
+
+  end;
+
+  SetLength(A, Len - Result);
+  Arr := A;
+end;
+
 function CopyString(const s: string; Copies: integer = 2): string;
 var
   i: integer;
@@ -460,6 +589,7 @@ begin
   end;
 
   s := TrimFromStart(s, Separator);
+  if Copy(s, 1, Length(Separator) + 1) = ('-' + Separator) then Delete(s, 2, Length(Separator));  // - 100 --> -100
   Result := s;
 end;
 
@@ -901,6 +1031,15 @@ begin
   Result := StringReplace(Text, ToRemove, '', rf);
 end;
 
+function RemoveAll(const Text: string; const StringsToRemove: array of string; IgnoreCase: Boolean = False): string; overload;
+var
+  i: integer;
+begin
+  Result := Text;
+  for i := 0 to Length(StringsToRemove) - 1 do
+    Result := RemoveAll(Result, StringsToRemove[i], IgnoreCase);
+end;
+
 function ReplaceAll(const SrcStr, OldStr, NewStr: string; IgnoreCase: Boolean = False): string;
 var
   rf: TReplaceFlags;
@@ -1104,6 +1243,11 @@ begin
   Result := Pad(IntToStr(x), Len, PaddingChar);
 end;
 
+function Pad(const x: Int64; Len: integer; PaddingChar: Char = '0'): string;
+begin
+  Result := Pad(IntToStr(x), Len, PaddingChar);
+end;
+
 {$hints off}
 function PadRight(Text: string; Len: integer; PaddingChar: Char = ' '): string;
 var
@@ -1121,12 +1265,17 @@ begin
   end;
   Result := Text;
 end;
+{$hints on}
 
 function PadRight(const x: integer; Len: integer; PaddingChar: Char = ' '): string;
 begin
   Result := PadRight(IntToStr(x), Len, PaddingChar);
 end;
-{$hints on}
+
+function PadRight(const x: Int64; Len: integer; PaddingChar: Char = ' '): string;
+begin
+  Result := PadRight(IntToStr(x), Len, PaddingChar);
+end;
 
 
 {$hints off}
